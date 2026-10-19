@@ -4,7 +4,8 @@ on:
   repository_dispatch:
     types: [corpora-site]
   schedule:
-    - cron: "17 6 * * 1"
+    # Hourly: picks up merged corpora-site changes on encorpora main.
+    - cron: "17 * * * *"
 permissions:
   contents: read
   pages: write
