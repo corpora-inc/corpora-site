@@ -38,9 +38,28 @@ jobs:
         working-directory: corpora-site
         env:
           CONFIG: ${{ vars.CORPORA_SITE_CONFIG }}
+          FUNDING_1: ${{ vars.CORPORA_SITE_FUNDING_1 }}
+          FUNDING_2: ${{ vars.CORPORA_SITE_FUNDING_2 }}
+          FUNDING_3: ${{ vars.CORPORA_SITE_FUNDING_3 }}
         run: |
           npm ci --no-audit --no-fund
-          printf '%s' "$CONFIG" > "$RUNNER_TEMP/site.json"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const config = JSON.parse(process.env.CONFIG);
+          const chunks = [1, 2, 3].map(n => process.env[`FUNDING_${n}`] || '');
+          if (chunks.some(Boolean)) {
+            if (!chunks[0]) throw new Error('Funding chunks must start at 1');
+            let empty = false;
+            config.funding = chunks.flatMap(chunk => {
+              if (!chunk) { empty = true; return []; }
+              if (empty) throw new Error('Funding chunks must be consecutive');
+              const routes = JSON.parse(chunk);
+              if (!Array.isArray(routes)) throw new Error('Funding chunk must be an array');
+              return routes;
+            });
+          }
+          writeFileSync(`${process.env.RUNNER_TEMP}/site.json`, JSON.stringify(config));
+          NODE
           CORPORA_SITE_CONFIG="$RUNNER_TEMP/site.json" npm run build
           echo corpora.inc > dist/CNAME
       - uses: actions/upload-pages-artifact@v3
