@@ -20,9 +20,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: corpora-inc/encorpora
-          sparse-checkout: |
-            corpora-site
-            amp
           persist-credentials: false
       - name: Fetch public website binary assets
         run: git -C "$GITHUB_WORKSPACE" lfs pull --include="corpora-site/public/**" --exclude=""
