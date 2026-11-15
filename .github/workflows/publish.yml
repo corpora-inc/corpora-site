@@ -15,12 +15,16 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    timeout-minutes: 40
     runs-on: ubuntu-latest
+    outputs:
+      workbook_refresh: ${{ steps.workbooks.outcome }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: corpora-inc/encorpora
           persist-credentials: false
+
       - name: Fetch public website binary assets
         run: git -C "$GITHUB_WORKSPACE" lfs pull --include="corpora-site/public/**" --exclude=""
       - uses: actions/setup-node@v4
@@ -33,6 +37,24 @@ jobs:
       # The site renders sample problems from AMP's own sources.
       - run: npm ci --no-audit --no-fund
         working-directory: amp
+      - run: npm ci --no-audit --no-fund
+        working-directory: corpora-site
+      - name: Install sandboxed workbook browser
+        timeout-minutes: 4
+        continue-on-error: true
+        working-directory: amp
+        run: npx playwright install-deps chromium && node scripts/install-browser.mjs --configure-linux-sandbox
+      - name: Refresh daily free workbooks
+        timeout-minutes: 20
+        id: workbooks
+        continue-on-error: true
+        working-directory: corpora-site
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PUBLIC_ASSETS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PUBLIC_ASSETS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.PUBLIC_ASSETS_REGION }}
+          WORKBOOK_BUCKET: ${{ vars.PUBLIC_ASSETS_BUCKET }}
+        run: npx tsx scripts/refresh-workbooks.ts "$RUNNER_TEMP/workbooks.json"
       - name: Build
         working-directory: corpora-site
         env:
@@ -41,7 +63,6 @@ jobs:
           FUNDING_2: ${{ vars.CORPORA_SITE_FUNDING_2 }}
           FUNDING_3: ${{ vars.CORPORA_SITE_FUNDING_3 }}
         run: |
-          npm ci --no-audit --no-fund
           node --input-type=module <<'NODE'
           import { writeFileSync } from 'node:fs';
           const config = JSON.parse(process.env.CONFIG);
@@ -59,7 +80,7 @@ jobs:
           }
           writeFileSync(`${process.env.RUNNER_TEMP}/site.json`, JSON.stringify(config));
           NODE
-          CORPORA_SITE_CONFIG="$RUNNER_TEMP/site.json" npm run build
+          CORPORA_WORKBOOK_MANIFEST="$RUNNER_TEMP/workbooks.json" CORPORA_SITE_CONFIG="$RUNNER_TEMP/site.json" npm run build
           echo corpora.inc > dist/CNAME
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -73,3 +94,23 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: corpora-inc/encorpora
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Notify search engines of changed public URLs
+        timeout-minutes: 5
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PUBLIC_ASSETS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PUBLIC_ASSETS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.PUBLIC_ASSETS_REGION }}
+          WORKBOOK_BUCKET: ${{ vars.PUBLIC_ASSETS_BUCKET }}
+        run: node corpora-site/scripts/submit-indexnow.mjs
+      - name: Report workbook refresh failure after publishing the retained edition
+        if: ${{ always() && needs.build.outputs.workbook_refresh != 'success' }}
+        run: |
+          echo "::error::Daily workbook refresh failed. The website retained a complete prior edition; inspect the build job."
+          exit 1
